@@ -19,14 +19,9 @@
 
 #include <string.h>
 
-#include "lwip/err.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
-#include "lwip/netdb.h"
-#include "lwip/dns.h"
 
 int udp_log_fd;
-static struct sockaddr_in serveraddr;
+struct sockaddr_in udp_log_socket;
 static uint8_t buf[UDP_LOGGING_MAX_PAYLOAD_LEN];
 
 int get_socket_error_code(int socket)
@@ -34,61 +29,54 @@ int get_socket_error_code(int socket)
 	int result;
 	u32_t optlen = sizeof(int);
 	if(getsockopt(socket, SOL_SOCKET, SO_ERROR, &result, &optlen) == -1) {
-	printf("getsockopt failed");
 	return -1;
 	}
 	return result;
 }
 
-int show_socket_error_reason(int socket)
-{
-	int err = get_socket_error_code(socket);
-	printf("UDP socket error %d %s", err, strerror(err));
-	return err;
-}
-
-void udp_logging_free(va_list l) {
+void udp_logging_free(void) {
 	int err = 0;
-	char *err_buf;
-    esp_log_set_vprintf(vprintf);
-    if( (err = shutdown(udp_log_fd, 2)) == 0 )
-	{
-		vprintf("\nUDP socket shutdown!", l);
-	}else
-	{
-    	asprintf(&err_buf, "\nShutting-down UDP socket failed: %d!\n", err);
-		vprintf(err_buf, l);
-	}
+	if (udp_log_fd != 0) {
+        esp_log_set_vprintf(vprintf);
+        if( (err = shutdown(udp_log_fd, 2)) == 0 )
+        {
+            ESP_LOGW("UDP_LOGGING", "UDP logging shutdown");
+        }else
+        {
+            ESP_LOGE("UDP_LOGGING", "Shutting-down UDP log socket failed: %d!\n", err);
+        }
 
-    if( (err = close( udp_log_fd )) == 0 )
-    {
-		vprintf("\nUDP socket closed!", l);
-	}else
-	{
-		asprintf(&err_buf, "\n Closing UDP socket failed: %d!\n", err);
-		vprintf(err_buf, l);
+        if( (err = close( udp_log_fd )) == 0 )
+        {
+            ESP_LOGW("UDP_LOGGING", "Closed UDP log socket ");
+        }else
+        {
+            ESP_LOGE("UDP_LOGGING", "Closing UDP log socket failed: %d!\n", err);
+        }
+        udp_log_fd = 0;
 	}
-    udp_log_fd = 0;
 }
 
 
 int udp_logging_vprintf( const char *str, va_list l ) {
     int err = 0;
 	int len;
-	char task_name[16];
-	char *cur_task = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-	strncpy(task_name, cur_task, 16);
-	task_name[15] = 0;
-	if (strncmp(task_name, "tiT", 16) != 0)
-	{
-		len = vsprintf((char*)buf, str, l);
-		if( (err = sendto(udp_log_fd, buf, len, 0, (struct sockaddr *)&serveraddr, sizeof(serveraddr))) < 0 )
-		{
-			show_socket_error_reason(udp_log_fd);
-			vprintf("\nFreeing UDP Logging. sendto failed!\n", l);
-			udp_logging_free(l);
-			return vprintf("UDP Logging freed!\n\n", l);
-		}
+//	char task_name[16];
+//	char *cur_task = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+//	vprintf( cur_task, l );
+//	strncpy(task_name, cur_task, 16);
+//	task_name[15] = 0;
+	if (udp_log_fd) {
+//        if (strncmp(task_name, "tiT", 16) != 0)
+//        {
+            len = vsprintf((char*)buf, str, l);
+            if( (err = sendto(udp_log_fd, buf, len, 0, (struct sockaddr *)&udp_log_socket, sizeof(udp_log_socket))) < 0 )
+            {
+                int socket_error = get_socket_error_code(udp_log_fd);
+                udp_logging_free();
+                ESP_LOGE("UDP_LOGGING", "UDP logging failed with the following error code: %d", socket_error);
+            }
+//        }
 	}
 	return vprintf( str, l );
 }
@@ -106,10 +94,10 @@ int udp_logging_init(const char *ipaddr, unsigned long port, vprintf_like_t func
     inet_aton(ipaddr, &ip_addr_bytes);
     ESP_LOGI("UDP_LOGGING", "Logging to 0x%x", ip_addr_bytes);
 
-    memset( &serveraddr, 0, sizeof(serveraddr) );
-    serveraddr.sin_family = AF_INET;
-    serveraddr.sin_port = htons( port );
-    serveraddr.sin_addr.s_addr = ip_addr_bytes;
+    memset( &udp_log_socket, 0, sizeof(udp_log_socket) );
+    udp_log_socket.sin_family = AF_INET;
+    udp_log_socket.sin_port = htons( port );
+    udp_log_socket.sin_addr.s_addr = ip_addr_bytes;
 
     int err = setsockopt(udp_log_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&send_timeout, sizeof(send_timeout));
 	if (err < 0) {
