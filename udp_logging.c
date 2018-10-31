@@ -34,24 +34,24 @@ int get_socket_error_code(int socket)
 	return result;
 }
 
-void udp_logging_free(void) {
+void udp_logging_free(vprintf_like_t func) {
 	int err = 0;
 	if (udp_log_fd != 0) {
         esp_log_set_vprintf(vprintf);
-        if( (err = shutdown(udp_log_fd, 2)) == 0 )
-        {
+
+        if( (err = shutdown(udp_log_fd, 2)) == 0 ) {
             ESP_LOGW("UDP_LOGGING", "UDP logging shutdown");
-        }else
-        {
+        } else {
             ESP_LOGE("UDP_LOGGING", "Shutting-down UDP log socket failed: %d!\n", err);
         }
 
-        if( (err = close( udp_log_fd )) == 0 )
-        {
+        if( (err = close( udp_log_fd )) == 0 ) {
             ESP_LOGW("UDP_LOGGING", "Closed UDP log socket ");
-        }else
-        {
+        } else {
             ESP_LOGE("UDP_LOGGING", "Closing UDP log socket failed: %d!\n", err);
+        }
+        if (func != NULL) {
+            esp_log_set_vprintf(func);
         }
         udp_log_fd = 0;
 	}
@@ -61,22 +61,20 @@ void udp_logging_free(void) {
 int udp_logging_vprintf( const char *str, va_list l ) {
     int err = 0;
 	int len;
-//	char task_name[16];
-//	char *cur_task = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-//	vprintf( cur_task, l );
-//	strncpy(task_name, cur_task, 16);
-//	task_name[15] = 0;
+	char task_name[16];
+	char *cur_task = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+	strncpy(task_name, cur_task, 16);
 	if (udp_log_fd) {
-//        if (strncmp(task_name, "tiT", 16) != 0)
-//        {
+        if (strncmp(task_name, "tiT", 4) != 0)
+        {
             len = vsprintf((char*)buf, str, l);
             if( (err = sendto(udp_log_fd, buf, len, 0, (struct sockaddr *)&udp_log_socket, sizeof(udp_log_socket))) < 0 )
             {
                 int socket_error = get_socket_error_code(udp_log_fd);
-                udp_logging_free();
+                udp_logging_free(vprintf);
                 ESP_LOGE("UDP_LOGGING", "UDP logging failed with the following error code: %d", socket_error);
             }
-//        }
+        }
 	}
 	return vprintf( str, l );
 }
@@ -84,9 +82,10 @@ int udp_logging_vprintf( const char *str, va_list l ) {
 int udp_logging_init(const char *ipaddr, unsigned long port, vprintf_like_t func) {
 	struct timeval send_timeout = {1,0};
 	udp_log_fd = 0;
-	ESP_LOGI("UDP_LOGGING", "initializing udp logging...");
+	ESP_LOGI("UDP_LOGGING", "Initializing udp logging...");
     if( (udp_log_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) {
        ESP_LOGE("UDP_LOGGING", "Cannot open socket!");
+       udp_log_fd = 0;
        return -1;
     }
 
@@ -102,9 +101,13 @@ int udp_logging_init(const char *ipaddr, unsigned long port, vprintf_like_t func
     int err = setsockopt(udp_log_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&send_timeout, sizeof(send_timeout));
 	if (err < 0) {
 	   ESP_LOGE("UDP_LOGGING", "Failed to set SO_SNDTIMEO. Error %d", err);
+	   udp_log_fd = 0;
+       return -1;
 	}
 
-    esp_log_set_vprintf(func);
+	if (func != NULL) {
+	    esp_log_set_vprintf(func);
+	}
 
     return 0;
 }
